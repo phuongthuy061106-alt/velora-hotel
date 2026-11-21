@@ -495,45 +495,26 @@ async function pullAllFromSupabase() {
         return;
       }
 
-      // 2b. Đồng bộ thao tác Xác nhận đơn (Đã đặt cọc 50%) từ Web lên Supabase
+    // 2b. Đồng bộ thao tác Xác nhận đơn (Đã đặt cọc 50%) từ Web lên Supabase
       if (
         !bk.cancelled &&
-        bk.depositPaid &&
-        bk.status === 'Đã xác nhận' &&
+        (bk.depositPaid || bk.status === 'Đã xác nhận') &&
         DB_MAPS.bkUiToDb.has(bk.id) &&
         !bk._depositSynced
       ) {
-        const bkDbId = DB_MAPS.bkUiToDb.get(bk.id);
-        // Kiểm tra xem trên DB đơn này đang ở trạng thái chờ xác nhận/chờ cọc thì mới cập nhật
-        const { data: currentDbBk } = await sb
-          .from('don_dat_phong')
-          .select('trang_thai, tong_tien_phong')
-          .eq('ma_don', bkDbId)
-          .single();
+        bk._depositSynced = true;
+        const { data: resConfirm, error: errConfirm } = await sb.rpc('admin_xac_nhan_don', {
+          p_ma_don_hien_thi: bk.id,
+          p_tien_coc: Number(bk.depositAmount) || null,
+          p_phuong_thuc: 'CHUYEN_KHOAN',
+          p_ghi_chu: bk.note || null
+        });
 
-        if (currentDbBk && ['CHO_XAC_NHAN', 'CHO_COC'].includes(currentDbBk.trang_thai)) {
-          bk._depositSynced = true;
-          const depositVal = Number(bk.depositAmount) || Math.round(Number(currentDbBk.tong_tien_phong) * 0.5);
-
-          // Cập nhật trạng thái đơn sang DA_COC và lưu số tiền cọc
-          await sb.from('don_dat_phong')
-            .update({
-              trang_thai: 'DA_COC',
-              tien_coc: depositVal,
-              ghi_chu: bk.note || null
-            })
-            .eq('ma_don', bkDbId);
-
-          // Ghi nhận giao dịch thu tiền cọc vào bảng thanh_toan
-          await sb.from('thanh_toan').insert({
-            ma_don: bkDbId,
-            phan_loai: 'COC',
-            phuong_thuc: 'CHUYEN_KHOAN',
-            tong_tien: depositVal,
-            trang_thai: 'THANH_CONG',
-            ghi_chu: 'Xác nhận cọc 50% từ Web quản trị'
-          });
-
+        if (errConfirm) {
+          console.error('❌ Lỗi xác nhận đơn lên Supabase:', errConfirm);
+          bk._depositSynced = false;
+        } else {
+          console.log('✅ Đã đồng bộ xác nhận đơn lên Supabase:', resConfirm);
           await pullAllFromSupabase();
           return;
         }
