@@ -1,9 +1,9 @@
 // ============================================================================
-// SUPABASE BRIDGE v2 - ĐỒNG BỘ 2 CHIỀU CHUẨN XÁC CHO VELORA HOTEL
+// SUPABASE BRIDGE v3 - ĐỒNG BỘ 2 CHIỀU NGUYÊN KHỐI CHO VELORA HOTEL
 // ============================================================================
 
 const SUPABASE_URL = 'https://rdlosoknzxsiuwbgwqfg.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_v5QQqyTXbXzSG88CpB5s-g_wBPK0Yc3';
+const SUPABASE_ANON_KEY = 'DÁN_ANON_PUBLIC_KEY_CỦA_BẠN_VÀO_ĐÂY';
 
 let sb = null;
 try {
@@ -14,7 +14,7 @@ try {
   console.error('❌ Lỗi khởi tạo Supabase:', e);
 }
 
-// Không tự động giữ phòng vật lý trên Web khi mới chỉ xác nhận cọc (chỉ giữ khi Check-in)
+// Chỉ giữ phòng vật lý khi Check-in (không giữ trước lúc mới xác nhận cọc)
 window.syncRoomReservationStates = function () {
   if (!Array.isArray(state.rooms)) return;
   const openStayByRoom = new Map();
@@ -43,29 +43,23 @@ const DB_MAPS = {
   stayUiToDb: new Map(), stayDbToUi: new Map()
 };
 
-const ROOM_STATUS_DB_TO_UI = {
-  'TRONG': 'Trống',
-  'DANG_SU_DUNG': 'Đang ở',
-  'DANG_DON': 'Đang dọn',
-  'BAO_TRI': 'Bảo trì'
-};
+// Lưu trạng thái thực tế trên DB để biết chính xác đơn nào vừa thay đổi trên Web
+const DB_BOOKING_STATUS = new Map(); // uiId -> 'CHO_XAC_NHAN' | 'DA_COC' | 'DANG_O' | 'HOAN_TAT' | 'DA_HUY'
+const IN_FLIGHT_OPS = new Set();     // Chống gọi trùng API khi đang chờ Supabase phản hồi
 
+let isPullingFromDb = false;
+
+const ROOM_STATUS_DB_TO_UI = { 'TRONG': 'Trống', 'DANG_SU_DUNG': 'Đang ở', 'DANG_DON': 'Đang dọn', 'BAO_TRI': 'Bảo trì' };
 const BOOKING_STATUS_DB_TO_UI = {
-  'CHO_XAC_NHAN': 'Chưa xác nhận',
-  'CHO_COC': 'Chưa xác nhận',
-  'DA_COC': 'Đã xác nhận',
-  'DANG_O': 'Đang lưu trú',
-  'HOAN_TAT': 'Hoàn thành',
-  'DA_HUY': 'Đã hủy',
-  'NO_SHOW': 'Đã hủy'
+  'CHO_XAC_NHAN': 'Chưa xác nhận', 'CHO_COC': 'Chưa xác nhận',
+  'DA_COC': 'Đã xác nhận', 'DANG_O': 'Đang lưu trú',
+  'HOAN_TAT': 'Hoàn thành', 'DA_HUY': 'Đã hủy', 'NO_SHOW': 'Đã hủy'
 };
-
 const SERVICE_GROUP_DB_TO_UI = {
   'SPA': 'Spa', 'GIAT_UI': 'Giặt ủi', 'DUA_DON': 'Đưa đón',
   'TOUR': 'Tour tham quan', 'MINIBAR': 'Minibar',
   'PHU_THU': 'Phụ thu', 'TIEN_PHAT': 'Phí phạt vi phạm', 'KHAC': 'Khác'
 };
-
 const BED_TYPE_DB_TO_UI = {
   'DOI': '1 giường đôi', 'DON': '1 giường đơn', '2_DON': '2 giường đơn',
   'DOI_HOAC_2_DON': '1 giường đôi hoặc 2 giường đơn',
@@ -74,10 +68,11 @@ const BED_TYPE_DB_TO_UI = {
 };
 
 // ============================================================================
-// 1. TẢI DỮ LIỆU TỪ SUPABASE VỀ WEB
+// 1. KÉO DỮ LIỆU TỪ SUPABASE VỀ WEB
 // ============================================================================
 async function pullAllFromSupabase() {
   if (!sb) return;
+  isPullingFromDb = true;
   try {
     const [
       { data: dbCats }, { data: dbPrices }, { data: dbRooms },
@@ -105,6 +100,7 @@ async function pullAllFromSupabase() {
 
     if (!dbCats || !dbRooms) return;
     Object.values(DB_MAPS).forEach(m => m.clear());
+    DB_BOOKING_STATUS.clear();
 
     const mappedCategories = dbCats.map(c => {
       const uiId = 'HP' + String(c.ma_loai_phong).padStart(3, '0');
@@ -118,10 +114,8 @@ async function pullAllFromSupabase() {
         id: uiId, dbId: c.ma_loai_phong, name: c.ten_loai_phong,
         area: Number(c.dien_tich) || 25,
         beds: BED_TYPE_DB_TO_UI[c.loai_giuong] || c.loai_giuong,
-        stdAdults: c.so_luong_nguoi_lon || 2,
-        stdChildren: c.so_luong_tre_em || 1,
-        maxAdults: c.so_luong_nguoi_lon || 2,
-        maxExtraBed: c.giuong_phu_toi_da || 0,
+        stdAdults: c.so_luong_nguoi_lon || 2, stdChildren: c.so_luong_tre_em || 1,
+        maxAdults: c.so_luong_nguoi_lon || 2, maxExtraBed: c.giuong_phu_toi_da || 0,
         maxAdultsLimit: (c.so_luong_nguoi_lon || 2) + (c.giuong_phu_toi_da || 0),
         maxChildren: c.so_luong_tre_em || 1,
         capacity: `${c.so_luong_nguoi_lon} người lớn + ${c.so_luong_tre_em} trẻ dưới ${c.do_tuoi_tre_em} tuổi`,
@@ -129,22 +123,16 @@ async function pullAllFromSupabase() {
         status: 'Đang kinh doanh',
         extraAdultFee: Number(c.phu_thu_nguoi_lon) || 200000,
         extraChildFee: Number(c.phu_thu_tre_em) || 100000,
-        description: c.mo_ta || '',
-        images: Array.isArray(c.hinh_anh) ? c.hinh_anh : [],
-        amenitiesList: amNames,
-        amenities: amNames.join(', ')
+        description: c.mo_ta || '', images: Array.isArray(c.hinh_anh) ? c.hinh_anh : [],
+        amenitiesList: amNames, amenities: amNames.join(', ')
       };
     });
 
     const mappedPricePlans = (dbPrices || []).map(p => ({
-      id: 'BG' + String(p.ma_bang_gia).padStart(3, '0'),
-      dbId: p.ma_bang_gia,
+      id: 'BG' + String(p.ma_bang_gia).padStart(3, '0'), dbId: p.ma_bang_gia,
       categoryId: DB_MAPS.catDbToUi.get(p.ma_loai_phong) || 'HP001',
-      startDate: p.ngay_bat_dau,
-      endDate: p.ngay_ket_thuc || '',
-      price: Number(p.gia_phong),
-      note: `Loại giá: ${p.loai_gia}`,
-      status: 'Đang áp dụng'
+      startDate: p.ngay_bat_dau, endDate: p.ngay_ket_thuc || '',
+      price: Number(p.gia_phong), note: `Loại giá: ${p.loai_gia}`, status: 'Đang áp dụng'
     }));
 
     const mappedRooms = dbRooms.map((r, idx) => {
@@ -159,8 +147,7 @@ async function pullAllFromSupabase() {
         name: `Phòng ${r.so_phong}`, floor: r.so_tang, categoryId: catUiId,
         bedConfig: catObj ? catObj.beds : '1 giường đôi',
         status: ROOM_STATUS_DB_TO_UI[r.trang_thai] || 'Trống',
-        businessStatus: 'Đang kinh doanh',
-        currentGuest: '', note: r.ghi_chu || ''
+        businessStatus: 'Đang kinh doanh', currentGuest: '', note: r.ghi_chu || ''
       };
     });
 
@@ -187,8 +174,7 @@ async function pullAllFromSupabase() {
         group: SERVICE_GROUP_DB_TO_UI[s.nhom_danh_muc] || s.nhom_danh_muc,
         name: s.ten_dich_vu,
         detail: s.ghi_chu || (s.thoi_luong_phut ? `${s.thoi_luong_phut} phút` : ''),
-        price: Number(s.don_gia_niem_yet),
-        unit: s.don_vi_tinh,
+        price: Number(s.don_gia_niem_yet), unit: s.don_vi_tinh,
         status: s.trang_thai === 'DANG_DUNG' ? 'Đang kinh doanh' : 'Ngừng kinh doanh'
       };
     });
@@ -200,8 +186,7 @@ async function pullAllFromSupabase() {
       return {
         id: uiId, dbId: kh.ma_khach_hang, name: kh.ten_khach_hang,
         phone: kh.so_dien_thoai, email: kh.email || '',
-        idCard: kh.so_giay_to || '', note: kh.quoc_tich || '',
-        status: 'Đang hoạt động'
+        idCard: kh.so_giay_to || '', note: kh.quoc_tich || '', status: 'Đang hoạt động'
       };
     });
 
@@ -228,17 +213,14 @@ async function pullAllFromSupabase() {
         id: uiId, dbId: lt.ma_luu_tru, detailId: lt.ma_chi_tiet,
         bookingId: ddp ? (ddp.ma_don_hien_thi || 'DD' + String(ddp.ma_don).padStart(6, '0')) : '',
         customerId: kh ? kh.id : '', guestName: kh ? kh.name : '',
-        phone: kh ? kh.phone : '', idCard: kh ? kh.idCard : '',
-        roomId: rmUiId,
+        phone: kh ? kh.phone : '', idCard: kh ? kh.idCard : '', roomId: rmUiId,
         expectedCheckIn: ddp ? `${ddp.ngay_den} 14:00` : '',
         actualCheckIn: lt.thoi_gian_nhan_phong ? lt.thoi_gian_nhan_phong.slice(0, 16) : '',
         expectedCheckOut: ddp ? `${ddp.ngay_di} 12:00` : '',
         actualCheckOut: lt.thoi_gian_tra_phong ? lt.thoi_gian_tra_phong.slice(0, 16) : '',
         earlySurcharge: earlyFee, lateSurcharge: lateFee,
-        staffName: lt.nhan_vien_xu_ly || 'Lễ tân',
-        note: lt.ghi_chu || '',
-        status: lt.thoi_gian_tra_phong ? 'Đã trả phòng' : 'Đang lưu trú',
-        _checkoutSynced: !!lt.thoi_gian_tra_phong
+        staffName: lt.nhan_vien_xu_ly || 'Lễ tân', note: lt.ghi_chu || '',
+        status: lt.thoi_gian_tra_phong ? 'Đã trả phòng' : 'Đang lưu trú'
       };
     });
 
@@ -246,6 +228,7 @@ async function pullAllFromSupabase() {
       const uiId = ddp.ma_don_hien_thi || ('DD' + String(ddp.ma_don).padStart(6, '0'));
       DB_MAPS.bkDbToUi.set(ddp.ma_don, uiId);
       DB_MAPS.bkUiToDb.set(uiId, ddp.ma_don);
+      DB_BOOKING_STATUS.set(uiId, ddp.trang_thai);
 
       const kh = mappedCustomers.find(k => k.dbId === ddp.ma_khach_hang);
       const ctds = (dbBookingItems || []).filter(i => i.ma_don === ddp.ma_don);
@@ -288,8 +271,7 @@ async function pullAllFromSupabase() {
         nights: ddp.so_dem || calcNightsDiff(ddp.ngay_den, ddp.ngay_di),
         items: groupedItems.length > 0 ? groupedItems : [{ categoryId: 'HP001', qty: 1, unitPrice: 1400000 }],
         serviceItems: mappedSrvItems,
-        roomTotal: Number(ddp.tong_tien_phong),
-        surchargeTotal: 0,
+        roomTotal: Number(ddp.tong_tien_phong), surchargeTotal: 0,
         totalAmount: Number(ddp.tong_tien_phong) + srvSum,
         depositAmount: Number(ddp.tien_coc) || Math.round(Number(ddp.tong_tien_phong) * 0.5),
         depositPaid: isConfirmedOnDb,
@@ -298,18 +280,14 @@ async function pullAllFromSupabase() {
         cancelDate: ddp.ngay_huy ? ddp.ngay_huy.slice(0, 10) : '',
         cancelFee: Number(ddp.phi_huy) || 0,
         cancelReason: ddp.ly_do_huy || '',
-        status: uiStatus,
-        note: ddp.ghi_chu || '',
-        _depositSynced: isConfirmedOnDb,
-        _cancelSynced: uiStatus === 'Đã hủy'
+        status: uiStatus, note: ddp.ghi_chu || ''
       };
     });
 
     const mappedInvoices = (dbPayments || []).map(tt => {
       const bk = mappedBookings.find(b => b.dbId === tt.ma_don);
       return {
-        id: 'HD' + String(tt.ma_thanh_toan).padStart(3, '0'),
-        dbId: tt.ma_thanh_toan,
+        id: 'HD' + String(tt.ma_thanh_toan).padStart(3, '0'), dbId: tt.ma_thanh_toan,
         bookingId: bk ? bk.id : '', customerId: bk ? bk.customerId : '',
         guestName: bk ? bk.guestName : 'Khách hàng', roomId: bk ? bk.roomId : '-',
         createdDate: tt.thoi_gian_lap ? tt.thoi_gian_lap.slice(0, 10) : '',
@@ -317,10 +295,8 @@ async function pullAllFromSupabase() {
         categoryType: tt.phan_loai === 'COC' ? 'Thu tiền cọc' : (tt.phan_loai === 'THANH_TOAN' ? 'Thanh toán trả phòng' : 'Hoàn tiền / Phí hủy'),
         roomCharge: bk ? bk.roomTotal : Number(tt.tong_tien),
         surchargeAmount: 0, serviceItems: bk ? bk.serviceItems : [], serviceChargeTotal: 0,
-        totalBeforeDeposit: Number(tt.tong_tien),
-        depositPaid: bk ? bk.depositAmount : 0,
-        finalPayable: Number(tt.tong_tien),
-        paymentMethod: tt.phuong_thuc,
+        totalBeforeDeposit: Number(tt.tong_tien), depositPaid: bk ? bk.depositAmount : 0,
+        finalPayable: Number(tt.tong_tien), paymentMethod: tt.phuong_thuc,
         status: tt.trang_thai === 'THANH_CONG' ? 'Đã thanh toán' : 'Chờ xử lý'
       };
     });
@@ -332,9 +308,8 @@ async function pullAllFromSupabase() {
     }));
 
     const mappedStaff = (dbStaff || []).map(qtv => ({
-      id: 'NV-' + String(qtv.ma_quan_tri_vien).padStart(3, '0'),
-      dbId: qtv.ma_quan_tri_vien, name: qtv.ho_ten, email: qtv.email,
-      password: '123', role: qtv.vai_tro,
+      id: 'NV-' + String(qtv.ma_quan_tri_vien).padStart(3, '0'), dbId: qtv.ma_quan_tri_vien,
+      name: qtv.ho_ten, email: qtv.email, password: '123', role: qtv.vai_tro,
       status: qtv.trang_thai === 'HOAT_DONG' ? 'Đang làm việc' : 'Khóa'
     }));
 
@@ -357,32 +332,29 @@ async function pullAllFromSupabase() {
     console.log('✅ Đã đồng bộ dữ liệu thành công từ Supabase!');
   } catch (err) {
     console.error('❌ Lỗi khi tải dữ liệu từ Supabase:', err);
+  } finally {
+    isPullingFromDb = false;
   }
 }
 
 // ============================================================================
+// 2. ĐẨY THAO TÁC TỪ WEB LÊN SUPABASE
 // ============================================================================
-// 2. ĐỒNG BỘ THAO TÁC TỪ WEB LÊN SUPABASE (BẮT TRỰC TIẾP SỰ KIỆN LƯU STORAGE)
-// ============================================================================
-let isPullingFromDb = false;
-let isSyncingToDb = false;
-
 async function syncStateChangesToSupabase(st) {
-  if (!sb || !st || isPullingFromDb || isSyncingToDb) return;
-  isSyncingToDb = true;
+  if (!sb || !st || isPullingFromDb) return;
 
-  try {
-    // 1. Kiểm tra các đơn đặt phòng (Tạo mới / Xác nhận cọc / Hủy đơn)
-    for (const bk of (st.bookings || [])) {
-      // Bỏ qua các đơn mẫu cứng DP001..DP006 nếu còn sót
-      if (/^DP00[1-6]$/.test(bk.id)) continue;
+  for (const bk of (st.bookings || [])) {
+    if (/^DP00[1-6]$/.test(bk.id)) continue;
 
-      // 1A. Tạo đơn đặt phòng mới từ Web (mã chưa có trong DB_MAPS)
-      if (!DB_MAPS.bkUiToDb.has(bk.id) && !bk._syncing) {
-        bk._syncing = true;
+    // A. TẠO ĐƠN MỚI TỪ WEB
+    if (!DB_MAPS.bkUiToDb.has(bk.id)) {
+      const opKey = `create:${bk.id}`;
+      if (IN_FLIGHT_OPS.has(opKey)) continue;
+      IN_FLIGHT_OPS.add(opKey);
+
+      try {
         const catDbId = DB_MAPS.catUiToDb.get(bk.categoryId) || 1;
         const totalQty = (bk.items || []).reduce((s, it) => s + (Number(it.qty) || 1), 0) || 1;
-
         const { data: resCreate, error: errCreate } = await sb.rpc('api_tao_don_dat_phong', {
           p_ten_khach_hang: bk.guestName,
           p_so_dien_thoai: bk.phone,
@@ -399,11 +371,9 @@ async function syncStateChangesToSupabase(st) {
         });
 
         if (errCreate || !resCreate?.success) {
-          alert('❌ Supabase từ chối tạo đơn: ' + (resCreate?.error || errCreate?.message));
-          bk._syncing = false;
+          alert('❌ Lỗi lưu đơn lên Supabase: ' + (resCreate?.error || errCreate?.message));
           return;
         }
-
         if (bk.depositPaid && resCreate.ma_don) {
           await sb.rpc('admin_xac_nhan_don', {
             p_ma_don_hien_thi: resCreate.ma_don,
@@ -414,28 +384,20 @@ async function syncStateChangesToSupabase(st) {
         }
         await pullAllFromSupabase();
         return;
+      } finally {
+        IN_FLIGHT_OPS.delete(opKey);
       }
+    }
 
-      // 1B. Hủy đơn đặt phòng
-      if (bk.cancelled && DB_MAPS.bkUiToDb.has(bk.id) && !bk._cancelSynced) {
-        bk._cancelSynced = true;
-        const { error: errCancel } = await sb.rpc('api_huy_don', {
-          p_ma_don_hien_thi: bk.id,
-          p_so_dien_thoai: bk.phone,
-          p_ly_do_huy: bk.cancelReason || 'Hủy trên Web quản trị'
-        });
-        if (errCancel) {
-          alert('❌ Lỗi hủy đơn: ' + errCancel.message);
-          bk._cancelSynced = false;
-        } else {
-          await pullAllFromSupabase();
-          return;
-        }
-      }
+    const dbStatus = DB_BOOKING_STATUS.get(bk.id);
 
-      // 1C. Xác nhận đơn (Chưa xác nhận -> Đã xác nhận / Đã đặt cọc 50%)
-      if (!bk.cancelled && (bk.depositPaid || bk.status === 'Đã xác nhận') && DB_MAPS.bkUiToDb.has(bk.id) && !bk._depositSynced) {
-        bk._depositSynced = true;
+    // B. XÁC NHẬN ĐƠN (DB đang là CHO_XAC_NHAN/CHO_COC, Web đổi sang Đã xác nhận)
+    if (!bk.cancelled && (bk.depositPaid || bk.status === 'Đã xác nhận') && ['CHO_XAC_NHAN', 'CHO_COC'].includes(dbStatus)) {
+      const opKey = `confirm:${bk.id}`;
+      if (IN_FLIGHT_OPS.has(opKey)) continue;
+      IN_FLIGHT_OPS.add(opKey);
+
+      try {
         const { data: resConfirm, error: errConfirm } = await sb.rpc('admin_xac_nhan_don', {
           p_ma_don_hien_thi: bk.id,
           p_tien_coc: Number(bk.depositAmount) || null,
@@ -444,21 +406,49 @@ async function syncStateChangesToSupabase(st) {
         });
         if (errConfirm || !resConfirm?.success) {
           alert('❌ Lỗi xác nhận đơn: ' + (resConfirm?.error || errConfirm?.message));
-          bk._depositSynced = false;
-        } else {
-          await pullAllFromSupabase();
           return;
         }
+        await pullAllFromSupabase();
+        return;
+      } finally {
+        IN_FLIGHT_OPS.delete(opKey);
       }
     }
 
-    // 2. Kiểm tra Check-in & Check-out
-    for (const ci of (st.checkins || [])) {
-      if (!DB_MAPS.stayUiToDb.has(ci.id) && !ci._syncing) {
-        ci._syncing = true;
+    // C. HỦY ĐƠN (DB chưa hủy, Web đổi sang Đã hủy)
+    if (bk.cancelled && dbStatus && !['DA_HUY', 'NO_SHOW', 'HOAN_TAT'].includes(dbStatus)) {
+      const opKey = `cancel:${bk.id}`;
+      if (IN_FLIGHT_OPS.has(opKey)) continue;
+      IN_FLIGHT_OPS.add(opKey);
+
+      try {
+        const { data: resCancel, error: errCancel } = await sb.rpc('api_huy_don', {
+          p_ma_don_hien_thi: bk.id,
+          p_so_dien_thoai: bk.phone,
+          p_ly_do_huy: bk.cancelReason || 'Hủy trên Web quản trị'
+        });
+        if (errCancel || !resCancel?.success) {
+          alert('❌ Lỗi hủy đơn: ' + (resCancel?.error || errCancel?.message));
+          return;
+        }
+        await pullAllFromSupabase();
+        return;
+      } finally {
+        IN_FLIGHT_OPS.delete(opKey);
+      }
+    }
+  }
+
+  // D. CHECK-IN & CHECK-OUT
+  for (const ci of (st.checkins || [])) {
+    if (!DB_MAPS.stayUiToDb.has(ci.id)) {
+      const opKey = `checkin:${ci.id}`;
+      if (IN_FLIGHT_OPS.has(opKey)) continue;
+      IN_FLIGHT_OPS.add(opKey);
+
+      try {
         const roomDbId = DB_MAPS.roomUiToDb.get(ci.roomId);
         const bkDbId = DB_MAPS.bkUiToDb.get(ci.bookingId);
-
         if (roomDbId && bkDbId) {
           const { data: ctdList } = await sb.from('chi_tiet_don').select('ma_chi_tiet').eq('ma_don', bkDbId);
           const { data: existingLts } = await sb.from('luu_tru').select('ma_chi_tiet');
@@ -478,41 +468,48 @@ async function syncStateChangesToSupabase(st) {
             });
             if (errCi || !resCi?.success) {
               alert('❌ Lỗi Check-in: ' + (resCi?.error || errCi?.message));
-              ci._syncing = false;
-            } else {
-              await pullAllFromSupabase();
               return;
             }
+            await pullAllFromSupabase();
+            return;
           }
         }
-      }
-
-      if (ci.actualCheckOut && DB_MAPS.stayUiToDb.has(ci.id) && !ci._checkoutSynced) {
-        ci._checkoutSynced = true;
-        const stayDbId = DB_MAPS.stayUiToDb.get(ci.id);
-        await sb.rpc('admin_check_out', {
-          p_ma_luu_tru: stayDbId,
-          p_phu_thu_tra_muon: Number(ci.lateSurcharge) || 0,
-          p_phuong_thuc: 'CHUYEN_KHOAN'
-        });
-        await pullAllFromSupabase();
-        return;
+      } finally {
+        IN_FLIGHT_OPS.delete(opKey);
       }
     }
-  } finally {
-    isSyncingToDb = false;
+
+    if (ci.actualCheckOut && DB_MAPS.stayUiToDb.has(ci.id)) {
+      const bkDbStatus = DB_BOOKING_STATUS.get(ci.bookingId);
+      if (bkDbStatus === 'DANG_O') {
+        const opKey = `checkout:${ci.id}`;
+        if (IN_FLIGHT_OPS.has(opKey)) continue;
+        IN_FLIGHT_OPS.add(opKey);
+
+        try {
+          const stayDbId = DB_MAPS.stayUiToDb.get(ci.id);
+          await sb.rpc('admin_check_out', {
+            p_ma_luu_tru: stayDbId,
+            p_phu_thu_tra_muon: Number(ci.lateSurcharge) || 0,
+            p_phuong_thuc: 'CHUYEN_KHOAN'
+          });
+          await pullAllFromSupabase();
+          return;
+        } finally {
+          IN_FLIGHT_OPS.delete(opKey);
+        }
+      }
+    }
   }
 }
 
 (function initSupabaseSync() {
-  // Bắt mọi lần app.js hoặc transactions.js lưu dữ liệu vào localStorage
   const originalSetItem = localStorage.setItem.bind(localStorage);
   localStorage.setItem = function (key, value) {
     originalSetItem(key, value);
     if (key === STORAGE_KEY && !isPullingFromDb) {
       try {
-        const parsedState = JSON.parse(value);
-        syncStateChangesToSupabase(parsedState);
+        syncStateChangesToSupabase(JSON.parse(value));
       } catch (_) {}
     }
   };
