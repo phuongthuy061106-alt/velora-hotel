@@ -3,7 +3,7 @@
 // ============================================================================
 
 const SUPABASE_URL = 'https://rdlosoknzxsiuwbgwqfg.supabase.co';
-const SUPABASE_ANON_KEY = 'DÁN_ANON_PUBLIC_KEY_CỦA_BẠN_VÀO_ĐÂY';
+const SUPABASE_ANON_KEY = 'sb_publishable_v5QQqyTXbXzSG88CpB5s-g_wBPK0Yc3';
 
 let sb = null;
 try {
