@@ -378,7 +378,10 @@ async function pullAllFromSupabase() {
 
     try {
       for (const bk of (st.bookings || [])) {
-        // 1. Tạo đơn đặt phòng mới từ Web
+        // Bỏ qua các đơn mẫu cứng (DP001..DP006) nếu còn sót trong localStorage
+        if (/^DP00[1-6]$/.test(bk.id)) continue;
+
+        // 1. Tạo đơn đặt phòng mới từ Web (mã bắt đầu bằng DP...)
         if (!DB_MAPS.bkUiToDb.has(bk.id) && !bk._syncing) {
           bk._syncing = true;
           const catDbId = DB_MAPS.catUiToDb.get(bk.categoryId) || 1;
@@ -400,24 +403,24 @@ async function pullAllFromSupabase() {
           });
 
           if (errCreate || !resCreate?.success) {
-            console.error('❌ Lỗi tạo đơn lên Supabase:', errCreate || resCreate?.error);
-            alert('Lỗi lưu đơn lên Supabase: ' + (resCreate?.error || errCreate?.message));
+            alert('❌ Supabase từ chối tạo đơn: ' + (resCreate?.error || errCreate?.message));
             bk._syncing = false;
             return;
           }
 
           if (bk.depositPaid && resCreate.ma_don) {
-            await sb.rpc('admin_xac_nhan_don', {
+            const { error: errDep } = await sb.rpc('admin_xac_nhan_don', {
               p_ma_don_hien_thi: resCreate.ma_don,
               p_tien_coc: Number(bk.depositAmount) || null,
               p_phuong_thuc: 'CHUYEN_KHOAN',
               p_ghi_chu: bk.note || null
             });
+            if (errDep) alert('❌ Lỗi xác nhận cọc: ' + errDep.message);
           }
+
           await pullAllFromSupabase();
           return;
         }
-
         // 2. Hủy đơn đặt phòng
         if (bk.cancelled && DB_MAPS.bkUiToDb.has(bk.id) && !bk._cancelSynced) {
           bk._cancelSynced = true;
