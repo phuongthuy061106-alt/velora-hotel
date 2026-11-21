@@ -536,6 +536,21 @@ async function pullAllFromSupabase() {
         await pullAllFromSupabase();
         return;
       }
+      // ============================================================================
+// 3. LẮNG NGHE REALTIME: TỰ ĐỘNG CẬP NHẬT WEB QUẢN TRỊ KHI WEB KHÁCH / COZE CÓ ĐƠN MỚI
+// ============================================================================
+sb.channel('velora-realtime-sync')
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'don_dat_phong' }, () => {
+    console.log('🔔 Có thay đổi mới ở bảng don_dat_phong -> Đang đồng bộ...');
+    pullAllFromSupabase();
+  })
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'phong' }, () => {
+    pullAllFromSupabase();
+  })
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'luu_tru' }, () => {
+    pullAllFromSupabase();
+  })
+  .subscribe();
     }
   };
 })();
