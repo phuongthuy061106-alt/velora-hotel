@@ -483,7 +483,7 @@ async function pullAllFromSupabase() {
         }
       }
 
-      // 2. Đồng bộ thao tác Hủy đơn từ Web lên Supabase
+     // 2. Đồng bộ thao tác Hủy đơn từ Web lên Supabase
       if (bk.cancelled && DB_MAPS.bkUiToDb.has(bk.id) && !bk._cancelSynced) {
         bk._cancelSynced = true;
         await sb.rpc('api_huy_don', {
@@ -494,8 +494,50 @@ async function pullAllFromSupabase() {
         await pullAllFromSupabase();
         return;
       }
-    }
 
+      // 2b. Đồng bộ thao tác Xác nhận đơn (Đã đặt cọc 50%) từ Web lên Supabase
+      if (
+        !bk.cancelled &&
+        bk.depositPaid &&
+        bk.status === 'Đã xác nhận' &&
+        DB_MAPS.bkUiToDb.has(bk.id) &&
+        !bk._depositSynced
+      ) {
+        const bkDbId = DB_MAPS.bkUiToDb.get(bk.id);
+        // Kiểm tra xem trên DB đơn này đang ở trạng thái chờ xác nhận/chờ cọc thì mới cập nhật
+        const { data: currentDbBk } = await sb
+          .from('don_dat_phong')
+          .select('trang_thai, tong_tien_phong')
+          .eq('ma_don', bkDbId)
+          .single();
+
+        if (currentDbBk && ['CHO_XAC_NHAN', 'CHO_COC'].includes(currentDbBk.trang_thai)) {
+          bk._depositSynced = true;
+          const depositVal = Number(bk.depositAmount) || Math.round(Number(currentDbBk.tong_tien_phong) * 0.5);
+
+          // Cập nhật trạng thái đơn sang DA_COC và lưu số tiền cọc
+          await sb.from('don_dat_phong')
+            .update({
+              trang_thai: 'DA_COC',
+              tien_coc: depositVal,
+              ghi_chu: bk.note || null
+            })
+            .eq('ma_don', bkDbId);
+
+          // Ghi nhận giao dịch thu tiền cọc vào bảng thanh_toan
+          await sb.from('thanh_toan').insert({
+            ma_don: bkDbId,
+            phan_loai: 'COC',
+            phuong_thuc: 'CHUYEN_KHOAN',
+            tong_tien: depositVal,
+            trang_thai: 'THANH_CONG',
+            ghi_chu: 'Xác nhận cọc 50% từ Web quản trị'
+          });
+
+          await pullAllFromSupabase();
+          return;
+        }
+      }
     // 3. Đồng bộ lượt Check-in mới từ Web -> Gọi admin_check_in để sinh luu_tru
     for (const ci of (st.checkins || [])) {
       if (!DB_MAPS.stayUiToDb.has(ci.id) && !ci._syncing) {
