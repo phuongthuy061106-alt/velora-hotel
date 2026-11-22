@@ -7,8 +7,8 @@
 // CHƯA CHẠY THỬ: cần kiểm tra với dữ liệu thật trên project Supabase của bạn.
 // ============================================================================
 
-const VEL_SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
-const VEL_SUPABASE_KEY = 'YOUR-ANON-OR-PUBLISHABLE-KEY'; // KHÔNG dùng service_role
+const VEL_SUPABASE_URL = 'https://rdlosoknzxsiuwbgwqfg.supabase.co/rest/v1/';
+const VEL_SUPABASE_KEY = 'sb_publishable_v5QQqyTXbXzSG88CpB5s-g_wBPK0Yc3'; // KHÔNG dùng service_role
 
 const velClient = window.supabase.createClient(VEL_SUPABASE_URL, VEL_SUPABASE_KEY);
 
