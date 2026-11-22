@@ -1,13 +1,14 @@
+
 // ============================================================================
-// VELORA HOTEL - ĐỒNG BỘ VỚI SUPABASE (GIAI ĐOẠN 1)
-// - Đọc: Supabase -> state (loại phòng, phòng, bảng giá, khách, đơn đặt, lưu trú, hóa đơn)
-// - Ghi: đặt phòng / xác nhận / nhận phòng / trả phòng / hủy đều gọi hàm RPC trong DB,
-//        xong thì tải lại dữ liệu (DB là nguồn sự thật, web chỉ hiển thị).
-// - Chưa đồng bộ ngược: thêm/sửa loại phòng, phòng, bảng giá, dịch vụ, nhân sự từ web.
-// CHƯA CHẠY THỬ: cần kiểm tra với dữ liệu thật trên project Supabase của bạn.
+// VELORA HOTEL - ĐỒNG BỘ VỚI SUPABASE (BẢN 2)
+// - ĐỌC : Supabase -> state (danh mục, khách, nhân sự, đơn đặt, lưu trú, hóa đơn, cấu hình)
+// - GHI DANH MỤC: web sửa state như cũ + saveState(); file này so sánh với bản đã đồng bộ
+//                 và tự đẩy phần thay đổi (thêm/sửa/xóa) lên Supabase.
+// - GHI GIAO DỊCH: đặt phòng / xác nhận / nhận phòng / trả phòng / hủy gọi hàm RPC trong DB.
+// Sau mỗi lần ghi, web tải lại từ DB (DB là nguồn sự thật).
+// CẦN: đã chạy velora-dong-bo-web.sql và velora-bo-sung-2.sql.
 // ============================================================================
 
-// Sửa dòng 10 trong supabase-sync.js (bỏ '/rest/v1/')
 const VEL_SUPABASE_URL = 'https://rdlosoknzxsiuwbgwqfg.supabase.co';
 const VEL_SUPABASE_KEY = 'sb_publishable_v5QQqyTXbXzSG88CpB5s-g_wBPK0Yc3';
 
