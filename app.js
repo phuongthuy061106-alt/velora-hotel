@@ -895,11 +895,40 @@ function initAuth() {
   const loginError = document.getElementById('loginError');
   const logoutBtn = document.getElementById('logoutBtn');
 
-  loginForm.addEventListener('submit', (e) => {
+  loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const user = usernameInput.value.trim();
     const pass = passwordInput.value.trim();
+    loginError.classList.add('hidden');
 
+    // 1. Nếu nhập dạng email -> Xác thực qua Supabase Auth
+    if (user.includes('@') && typeof supabaseClient !== 'undefined') {
+      const { data, error } = await supabaseClient.auth.signInWithPassword({
+        email: user,
+        password: pass
+      });
+
+      if (!error && data.user) {
+        currentAdminUser = {
+          id: data.user.id,
+          name: data.user.email,
+          role: 'Quản trị viên'
+        };
+        const disp = document.getElementById('currentUserDisplay');
+        if (disp) disp.textContent = currentAdminUser.name;
+
+        document.getElementById('loginScreen').classList.add('hidden');
+        document.getElementById('appLayout').classList.remove('hidden');
+        switchView('dashboard');
+        return;
+      } else {
+        console.error('Lỗi Supabase Auth:', error?.message);
+        loginError.classList.remove('hidden');
+        return;
+      }
+    }
+
+    // 2. Dự phòng đăng nhập cục bộ (admin / 123 hoặc nhân viên trong state.staff)
     const matchedAdmin = (state.staff || []).find(s =>
       s.email && s.email.toLowerCase() === user.toLowerCase() && (s.password || '123') === pass
     );
@@ -911,7 +940,6 @@ function initAuth() {
       const disp = document.getElementById('currentUserDisplay');
       if (disp) disp.textContent = currentAdminUser.name;
 
-      loginError.classList.add('hidden');
       document.getElementById('loginScreen').classList.add('hidden');
       document.getElementById('appLayout').classList.remove('hidden');
       switchView('dashboard');
@@ -920,7 +948,10 @@ function initAuth() {
     }
   });
 
-  logoutBtn.addEventListener('click', () => {
+  logoutBtn.addEventListener('click', async () => {
+    if (typeof supabaseClient !== 'undefined') {
+      await supabaseClient.auth.signOut();
+    }
     document.getElementById('appLayout').classList.add('hidden');
     document.getElementById('loginScreen').classList.remove('hidden');
     passwordInput.value = '';
