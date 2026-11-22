@@ -188,10 +188,11 @@ async function velRpc(name, args) {
 const velSb = {
   // Đăng nhập bằng Supabase Auth (email + mật khẩu), thay cho admin/123 ghi cứng
   async login(email, password) {
-    const { error } = await velClient.auth.signInWithPassword({ email, password });
+    const { data, error } = await velClient.auth.signInWithPassword({ email, password });
     if (error) throw new Error(error.message);
     await velRefresh();
     velSb.subscribe();
+    return data.user;
   },
 async logout() {
     await velClient.auth.signOut();
