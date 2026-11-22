@@ -888,6 +888,15 @@ function getCategoryById(catId) {
 // ============================================================================
 // 1. XỬ LÝ ĐĂNG NHẬP (TÀI KHOẢN: admin / MẬT KHẨU: 123)
 // ============================================================================
+function applyLoggedInUI(userObj) {
+  currentAdminUser = userObj;
+  const disp = document.getElementById('currentUserDisplay');
+  if (disp) disp.textContent = currentAdminUser.name;
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('appLayout').classList.remove('hidden');
+  switchView('dashboard');
+}
+
 function initAuth() {
   const loginForm = document.getElementById('loginForm');
   const usernameInput = document.getElementById('usernameInput');
@@ -901,28 +910,19 @@ function initAuth() {
     const pass = passwordInput.value.trim();
     loginError.classList.add('hidden');
 
-    // 1. Nếu nhập dạng email -> Xác thực qua Supabase Auth
-    if (user.includes('@') && typeof supabaseClient !== 'undefined') {
-      const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email: user,
-        password: pass
-      });
-
-      if (!error && data.user) {
-        currentAdminUser = {
-          id: data.user.id,
-          name: data.user.email,
+    // 1. Đăng nhập bằng tài khoản Supabase Auth (email chứa '@')
+    if (user.includes('@') && typeof velSb !== 'undefined') {
+      try {
+        const sbUser = await velSb.login(user, pass);
+        applyLoggedInUI({
+          id: sbUser.id,
+          name: sbUser.email,
           role: 'Quản trị viên'
-        };
-        const disp = document.getElementById('currentUserDisplay');
-        if (disp) disp.textContent = currentAdminUser.name;
-
-        document.getElementById('loginScreen').classList.add('hidden');
-        document.getElementById('appLayout').classList.remove('hidden');
-        switchView('dashboard');
+        });
         return;
-      } else {
-        console.error('Lỗi Supabase Auth:', error?.message);
+      } catch (err) {
+        console.error('Lỗi đăng nhập Supabase:', err.message);
+        loginError.textContent = 'Đăng nhập thất bại: ' + err.message;
         loginError.classList.remove('hidden');
         return;
       }
@@ -934,23 +934,20 @@ function initAuth() {
     );
 
     if ((user === 'admin' && pass === '123') || matchedAdmin) {
-      currentAdminUser = matchedAdmin
-        ? { id: matchedAdmin.id, name: matchedAdmin.name, role: matchedAdmin.role }
-        : { id: 'NV-001', name: 'admin', role: 'Quản trị viên' };
-      const disp = document.getElementById('currentUserDisplay');
-      if (disp) disp.textContent = currentAdminUser.name;
-
-      document.getElementById('loginScreen').classList.add('hidden');
-      document.getElementById('appLayout').classList.remove('hidden');
-      switchView('dashboard');
+      applyLoggedInUI(
+        matchedAdmin
+          ? { id: matchedAdmin.id, name: matchedAdmin.name, role: matchedAdmin.role }
+          : { id: 'NV-001', name: 'admin', role: 'Quản trị viên' }
+      );
     } else {
+      loginError.textContent = 'Sai tài khoản hoặc mật khẩu!';
       loginError.classList.remove('hidden');
     }
   });
 
   logoutBtn.addEventListener('click', async () => {
-    if (typeof supabaseClient !== 'undefined') {
-      await supabaseClient.auth.signOut();
+    if (typeof velSb !== 'undefined') {
+      await velSb.logout();
     }
     document.getElementById('appLayout').classList.add('hidden');
     document.getElementById('loginScreen').classList.remove('hidden');
@@ -4708,12 +4705,24 @@ document.getElementById('commonModal').addEventListener('click', (e) => {
 // ============================================================================
 // KHỞI ĐỘNG ỨNG DỤNG
 // ============================================================================
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initAuth();
   initNavigation();
   autoCancelNoShowBookings();
   if (typeof syncRoomReservationStates === 'function') syncRoomReservationStates();
   updateSidebarCounters();
+
+  // Tự động khôi phục phiên đăng nhập Supabase và tải dữ liệu thật khi F5
+  if (typeof velSb !== 'undefined') {
+    try {
+      const sbUser = await velSb.restoreSession();
+      if (sbUser) {
+        applyLoggedInUI({ id: sbUser.id, name: sbUser.email, role: 'Quản trị viên' });
+      }
+    } catch (err) {
+      console.warn('Không khôi phục được phiên Supabase:', err.message);
+    }
+  }
 
   setInterval(() => {
     if (autoCancelNoShowBookings()) {
