@@ -888,15 +888,6 @@ function getCategoryById(catId) {
 // ============================================================================
 // 1. XỬ LÝ ĐĂNG NHẬP (TÀI KHOẢN: admin / MẬT KHẨU: 123)
 // ============================================================================
-function applyLoggedInUI(userObj) {
-  currentAdminUser = userObj;
-  const disp = document.getElementById('currentUserDisplay');
-  if (disp) disp.textContent = currentAdminUser.name;
-  document.getElementById('loginScreen').classList.add('hidden');
-  document.getElementById('appLayout').classList.remove('hidden');
-  switchView('dashboard');
-}
-
 function initAuth() {
   const loginForm = document.getElementById('loginForm');
   const usernameInput = document.getElementById('usernameInput');
@@ -904,51 +895,32 @@ function initAuth() {
   const loginError = document.getElementById('loginError');
   const logoutBtn = document.getElementById('logoutBtn');
 
-  loginForm.addEventListener('submit', async (e) => {
+  loginForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const user = usernameInput.value.trim();
     const pass = passwordInput.value.trim();
-    loginError.classList.add('hidden');
 
-    // 1. Đăng nhập bằng tài khoản Supabase Auth (email chứa '@')
-    if (user.includes('@') && typeof velSb !== 'undefined') {
-      try {
-        const sbUser = await velSb.login(user, pass);
-        applyLoggedInUI({
-          id: sbUser.id,
-          name: sbUser.email,
-          role: 'Quản trị viên'
-        });
-        return;
-      } catch (err) {
-        console.error('Lỗi đăng nhập Supabase:', err.message);
-        loginError.textContent = 'Đăng nhập thất bại: ' + err.message;
-        loginError.classList.remove('hidden');
-        return;
-      }
-    }
-
-    // 2. Dự phòng đăng nhập cục bộ (admin / 123 hoặc nhân viên trong state.staff)
     const matchedAdmin = (state.staff || []).find(s =>
       s.email && s.email.toLowerCase() === user.toLowerCase() && (s.password || '123') === pass
     );
 
     if ((user === 'admin' && pass === '123') || matchedAdmin) {
-      applyLoggedInUI(
-        matchedAdmin
-          ? { id: matchedAdmin.id, name: matchedAdmin.name, role: matchedAdmin.role }
-          : { id: 'NV-001', name: 'admin', role: 'Quản trị viên' }
-      );
+      currentAdminUser = matchedAdmin
+        ? { id: matchedAdmin.id, name: matchedAdmin.name, role: matchedAdmin.role }
+        : { id: 'NV-001', name: 'admin', role: 'Quản trị viên' };
+      const disp = document.getElementById('currentUserDisplay');
+      if (disp) disp.textContent = currentAdminUser.name;
+
+      loginError.classList.add('hidden');
+      document.getElementById('loginScreen').classList.add('hidden');
+      document.getElementById('appLayout').classList.remove('hidden');
+      switchView('dashboard');
     } else {
-      loginError.textContent = 'Sai tài khoản hoặc mật khẩu!';
       loginError.classList.remove('hidden');
     }
   });
 
-  logoutBtn.addEventListener('click', async () => {
-    if (typeof velSb !== 'undefined') {
-      await velSb.logout();
-    }
+  logoutBtn.addEventListener('click', () => {
     document.getElementById('appLayout').classList.add('hidden');
     document.getElementById('loginScreen').classList.remove('hidden');
     passwordInput.value = '';
@@ -4705,24 +4677,12 @@ document.getElementById('commonModal').addEventListener('click', (e) => {
 // ============================================================================
 // KHỞI ĐỘNG ỨNG DỤNG
 // ============================================================================
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   initAuth();
   initNavigation();
   autoCancelNoShowBookings();
   if (typeof syncRoomReservationStates === 'function') syncRoomReservationStates();
   updateSidebarCounters();
-
-  // Tự động khôi phục phiên đăng nhập Supabase và tải dữ liệu thật khi F5
-  if (typeof velSb !== 'undefined') {
-    try {
-      const sbUser = await velSb.restoreSession();
-      if (sbUser) {
-        applyLoggedInUI({ id: sbUser.id, name: sbUser.email, role: 'Quản trị viên' });
-      }
-    } catch (err) {
-      console.warn('Không khôi phục được phiên Supabase:', err.message);
-    }
-  }
 
   setInterval(() => {
     if (autoCancelNoShowBookings()) {
