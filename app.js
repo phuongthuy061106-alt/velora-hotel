@@ -831,7 +831,7 @@ function saveState(newState) {
     console.warn('Không lưu được localStorage:', e);
   }
   updateSidebarCounters(target);
-if (typeof velOnSave === 'function') velOnSave();
+  // Điểm mở rộng: gọi API backend ngoài tại đây nếu tích hợp đồng bộ dữ liệu
 }
 
 function getCategoryEffectivePrice(catId, dateStr = null) {
@@ -895,22 +895,31 @@ function initAuth() {
   const loginError = document.getElementById('loginError');
   const logoutBtn = document.getElementById('logoutBtn');
 
-  loginForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  try {
-    await velSb.login(usernameInput.value.trim(), passwordInput.value);
-  } catch (err) {
-    loginError.textContent = 'Đăng nhập thất bại: ' + err.message;
-    loginError.classList.remove('hidden');
-    return;
-  }
-  const disp = document.getElementById('currentUserDisplay');
-  if (disp) disp.textContent = currentAdminUser.name;
-  loginError.classList.add('hidden');
-  document.getElementById('loginScreen').classList.add('hidden');
-  document.getElementById('appLayout').classList.remove('hidden');
-  switchView('dashboard');
-});
+  loginForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const user = usernameInput.value.trim();
+    const pass = passwordInput.value.trim();
+
+    const matchedAdmin = (state.staff || []).find(s =>
+      s.email && s.email.toLowerCase() === user.toLowerCase() && (s.password || '123') === pass
+    );
+
+    if ((user === 'admin' && pass === '123') || matchedAdmin) {
+      currentAdminUser = matchedAdmin
+        ? { id: matchedAdmin.id, name: matchedAdmin.name, role: matchedAdmin.role }
+        : { id: 'NV-001', name: 'admin', role: 'Quản trị viên' };
+      const disp = document.getElementById('currentUserDisplay');
+      if (disp) disp.textContent = currentAdminUser.name;
+
+      loginError.classList.add('hidden');
+      document.getElementById('loginScreen').classList.add('hidden');
+      document.getElementById('appLayout').classList.remove('hidden');
+      switchView('dashboard');
+    } else {
+      loginError.classList.remove('hidden');
+    }
+  });
+
   logoutBtn.addEventListener('click', () => {
     document.getElementById('appLayout').classList.add('hidden');
     document.getElementById('loginScreen').classList.remove('hidden');
@@ -925,14 +934,6 @@ function initAuth() {
       renderCurrentView();
     }
   });
-  velSb.resume().then((ok) => {
-  if (!ok) return;
-  const disp = document.getElementById('currentUserDisplay');
-  if (disp) disp.textContent = currentAdminUser.name;
-  document.getElementById('loginScreen').classList.add('hidden');
-  document.getElementById('appLayout').classList.remove('hidden');
-  switchView('dashboard');
-}).catch(() => {});
 }
 
 // ============================================================================
