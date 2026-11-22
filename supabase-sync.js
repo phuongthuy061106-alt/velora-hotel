@@ -193,7 +193,9 @@ const velSb = {
     await velRefresh();
     velSb.subscribe();
   },
-  async logout() { await velClient.auth.signOut(),
+async logout() {
+    await velClient.auth.signOut();
+  }, // <-- Bắt buộc phải có dấu phẩy ở đây
   async restoreSession() {
     const { data: { session } } = await velClient.auth.getSession();
     if (!session || !session.user) return null;
