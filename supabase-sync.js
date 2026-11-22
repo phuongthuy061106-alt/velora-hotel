@@ -7,8 +7,9 @@
 // CHƯA CHẠY THỬ: cần kiểm tra với dữ liệu thật trên project Supabase của bạn.
 // ============================================================================
 
+// Sửa dòng 10 trong supabase-sync.js (bỏ '/rest/v1/')
 const VEL_SUPABASE_URL = 'https://rdlosoknzxsiuwbgwqfg.supabase.co';
-const VEL_SUPABASE_KEY = 'sb_publishable_v5QQqyTXbXzSG88CpB5s-g_wBPK0Yc3'; // KHÔNG dùng service_role
+const VEL_SUPABASE_KEY = 'sb_publishable_v5QQqyTXbXzSG88CpB5s-g_wBPK0Yc3';
 
 const velClient = window.supabase.createClient(VEL_SUPABASE_URL, VEL_SUPABASE_KEY);
 
@@ -192,7 +193,15 @@ const velSb = {
     await velRefresh();
     velSb.subscribe();
   },
-  async logout() { await velClient.auth.signOut(); },
+  async logout() { await velClient.auth.signOut(),
+  async restoreSession() {
+    const { data: { session } } = await velClient.auth.getSession();
+    if (!session || !session.user) return null;
+    await velRefresh();
+    velSb.subscribe();
+    return session.user;
+  },
+                
 
   // Đặt phòng mới (1 hạng phòng / lần gọi)
   createBooking: (f) => velRpc('api_tao_don_dat_phong', {
