@@ -700,7 +700,8 @@ function openBookingModal(bookingId = null) {
     });
     const hasQtyIncrease = draftItems.length > origItems.length ||
       draftItems.some((it, idx) => idx < origItems.length && (Number(it.qty) || 1) > (Number(origItems[idx].qty) || 1));
-    const hasRoomUpgrade = !!(hasCategoryUpgrade || (hasQtyIncrease && curRoomTotal > origRoomTotal));
+const datesChangedNow = !!(existing && (tempBk.checkIn !== existing.checkIn || tempBk.checkOut !== existing.checkOut));
+const hasRoomUpgrade = !!(hasCategoryUpgrade || datesChangedNow || (hasQtyIncrease && curRoomTotal > origRoomTotal));
     const additionalDeposit = hasRoomUpgrade ? Math.max(0, curDep50 - origDepositPaidVal) : 0;
     return { hasCategoryUpgrade, hasCategoryDowngrade, hasRoomUpgrade, additionalDeposit, newDeposit50: curDep50 };
   };
