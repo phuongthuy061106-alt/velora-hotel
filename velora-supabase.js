@@ -498,34 +498,20 @@ async function velPushTransactions() {
     return { did: customerChanged, creates: false, edited: false, notice };
   }
 
-  // 1) Đơn mới tạo trên web: mỗi hạng phòng trong đơn tạo thành một đơn trong DB
+  // 1) Đơn mới tạo trên web: giữ nguyên là MỘT đơn trong DB (nhiều phòng, nhiều hạng nếu có)
   for (const b of creates) {
     const items = (b.items && b.items.length) ? b.items : [{ categoryId: b.categoryId, qty: 1 }];
-    const codes = [];
-    // Tổng số khách của cả đơn, chia đều theo từng phòng rồi cộng lại cho từng hạng phòng
-    const totalRooms = items.reduce((sum, it) => sum + Math.max(1, Number(it.qty) || 1), 0);
+    // MỘT đơn duy nhất cho cả đơn trên web, dù có nhiều phòng / nhiều hạng phòng.
+    // Tổng số khách được DB tự chia xuống từng phòng để kiểm tra sức chứa.
     const totalAdults = (Number(b.adults) || 1) + (Number(b.extraAdultsQty) || 0);
-    if (totalAdults < totalRooms) throw new Error(`Cần ít nhất 1 người lớn cho mỗi phòng (đang đặt ${totalRooms} phòng, ${totalAdults} người lớn).`);
-    const share = (total, from, count) => {
-      const base = Math.floor(total / totalRooms), rem = total % totalRooms;
-      let sum = 0;
-      for (let k = from; k < from + count; k++) sum += base + (k < rem ? 1 : 0);
-      return sum;
-    };
-    let offset = 0;
-    for (const it of items) {
-      const qty = Math.max(1, Number(it.qty) || 1);
-      const r = await velCall('api_tao_don_dat_phong', {
-        p_ten_khach_hang: velCoreIds(b.guestName), p_so_dien_thoai: velCoreIds(b.phone), p_email: velCoreIds(b.email) || null,
-        p_ngay_den: b.checkIn, p_ngay_di: b.checkOut, p_ma_loai_phong: numOf(it.categoryId), p_so_luong_phong: qty,
-        p_so_nguoi_lon: share(totalAdults, offset, qty),
-        p_so_tre_duoi_6: share(Number(b.childrenUnder6) || 0, offset, qty),
-        p_so_tre_6_11: share(Number(b.children6to11) || 0, offset, qty),
-        p_ghi_chu: b.note || null, p_nguon_tao: velSource(b.source)
-      });
-      offset += qty;
-      codes.push(r.ma_don);
-    }
+    const r = await velCall('admin_tao_don_nhieu_phong', {
+      p_ten_khach_hang: velCoreIds(b.guestName), p_so_dien_thoai: velCoreIds(b.phone), p_email: velCoreIds(b.email) || null,
+      p_ngay_den: b.checkIn, p_ngay_di: b.checkOut,
+      p_chi_tiet: items.map((it) => ({ ma_loai_phong: numOf(it.categoryId), so_luong: Math.max(1, Number(it.qty) || 1) })),
+      p_so_nguoi_lon: totalAdults, p_so_tre_duoi_6: Number(b.childrenUnder6) || 0, p_so_tre_6_11: Number(b.children6to11) || 0,
+      p_ghi_chu: b.note || null, p_nguon_tao: velSource(b.source)
+    });
+    const codes = [r.ma_don];
     if (b.depositPaid) {
       for (const code of codes) {
         await velCall('admin_xac_nhan_don', {
