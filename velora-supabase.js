@@ -11,8 +11,8 @@
 // BẠN CHỈ CẦN SỬA 2 DÒNG DƯỚI ĐÂY (lấy trong Supabase > Project Settings > API):
 // ============================================================================
 
-const VEL_SUPABASE_URL = 'https://rdlosoknzxsiuwbgwqfg.supabase.co';   // <-- dán "Project URL" vào đây
-const VEL_SUPABASE_KEY = 'sb_publishable_v5QQqyTXbXzSG88CpB5s-g_wBPK0Yc3';        // <-- dán khóa "anon" / "publishable" (KHÔNG dùng service_role)
+const VEL_SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';   // <-- dán "Project URL" vào đây
+const VEL_SUPABASE_KEY = 'YOUR-ANON-OR-PUBLISHABLE-KEY';        // <-- dán khóa "anon" / "publishable" (KHÔNG dùng service_role)
 
 const velClient = window.supabase.createClient(VEL_SUPABASE_URL, VEL_SUPABASE_KEY);
 
@@ -157,8 +157,10 @@ async function velFetchState(base) {
       id: d.ma_don_hien_thi, dbId: d.ma_don, bookingTime: localDT(d.ngay_tao),
       customerId: idOf('KH', d.ma_khach_hang), source: SOURCE[d.nguon_tao] || d.nguon_tao,
       guestName: c.ten_khach_hang || '', phone: c.so_dien_thoai || '', email: c.email || '', idCard: c.so_giay_to || '',
-      adults: first.so_nguoi_lon || 1, children6to11: first.so_tre_em_6_11 || 0,
-      childrenUnder6: first.so_tre_em_duoi_6 || 0, extraBed: first.so_giuong_phu || 0,
+      adults: lines.reduce((sum, l) => sum + (l.so_nguoi_lon || 0), 0) || 1,
+      children6to11: lines.reduce((sum, l) => sum + (l.so_tre_em_6_11 || 0), 0),
+      childrenUnder6: lines.reduce((sum, l) => sum + (l.so_tre_em_duoi_6 || 0), 0),
+      extraBed: lines.reduce((sum, l) => sum + (l.so_giuong_phu || 0), 0),
       categoryId: first.ma_loai_phong ? idOf('HP', first.ma_loai_phong) : '',
       roomIds: stays.map((s) => s.roomId), roomId: (stays[0] || {}).roomId || '',
       lines: lines.map((l) => ({ id: l.ma_chi_tiet, categoryId: idOf('HP', l.ma_loai_phong) })),
@@ -500,15 +502,28 @@ async function velPushTransactions() {
   for (const b of creates) {
     const items = (b.items && b.items.length) ? b.items : [{ categoryId: b.categoryId, qty: 1 }];
     const codes = [];
+    // Tổng số khách của cả đơn, chia đều theo từng phòng rồi cộng lại cho từng hạng phòng
+    const totalRooms = items.reduce((sum, it) => sum + Math.max(1, Number(it.qty) || 1), 0);
+    const totalAdults = (Number(b.adults) || 1) + (Number(b.extraAdultsQty) || 0);
+    if (totalAdults < totalRooms) throw new Error(`Cần ít nhất 1 người lớn cho mỗi phòng (đang đặt ${totalRooms} phòng, ${totalAdults} người lớn).`);
+    const share = (total, from, count) => {
+      const base = Math.floor(total / totalRooms), rem = total % totalRooms;
+      let sum = 0;
+      for (let k = from; k < from + count; k++) sum += base + (k < rem ? 1 : 0);
+      return sum;
+    };
+    let offset = 0;
     for (const it of items) {
       const qty = Math.max(1, Number(it.qty) || 1);
-      const adults = (Number(b.adults) || 1) + (Number(b.extraAdultsQty) || 0);
       const r = await velCall('api_tao_don_dat_phong', {
         p_ten_khach_hang: velCoreIds(b.guestName), p_so_dien_thoai: velCoreIds(b.phone), p_email: velCoreIds(b.email) || null,
         p_ngay_den: b.checkIn, p_ngay_di: b.checkOut, p_ma_loai_phong: numOf(it.categoryId), p_so_luong_phong: qty,
-        p_so_nguoi_lon: Math.max(1, Math.ceil(adults / qty)), p_so_tre_duoi_6: Number(b.childrenUnder6) || 0,
-        p_so_tre_6_11: Number(b.children6to11) || 0, p_ghi_chu: b.note || null, p_nguon_tao: velSource(b.source)
+        p_so_nguoi_lon: share(totalAdults, offset, qty),
+        p_so_tre_duoi_6: share(Number(b.childrenUnder6) || 0, offset, qty),
+        p_so_tre_6_11: share(Number(b.children6to11) || 0, offset, qty),
+        p_ghi_chu: b.note || null, p_nguon_tao: velSource(b.source)
       });
+      offset += qty;
       codes.push(r.ma_don);
     }
     if (b.depositPaid) {
