@@ -494,25 +494,62 @@ async function velPushTransactions() {
   }
 
   // 1) Đơn mới tạo trên web: mỗi hạng phòng trong đơn tạo thành một đơn trong DB
+  // 1) Đơn mới tạo trên web: phân bổ đều số khách theo tổng số phòng của đơn để không vượt sức chứa
   for (const b of creates) {
     const items = (b.items && b.items.length) ? b.items : [{ categoryId: b.categoryId, qty: 1 }];
+    const totalRooms = items.reduce((sum, it) => sum + Math.max(1, Number(it.qty) || 1), 0);
+    const totalAdults = (Number(b.adults) || 1) + (Number(b.extraAdultsQty) || 0);
+    const totalKidsUnder6 = Number(b.childrenUnder6) || 0;
+    const totalKids6to11 = Number(b.children6to11) || 0;
+
+    let remAdults = totalAdults;
+    let remKidsUnder6 = totalKidsUnder6;
+    let remKids6to11 = totalKids6to11;
+    let remRooms = totalRooms;
+
     const codes = [];
     for (const it of items) {
       const qty = Math.max(1, Number(it.qty) || 1);
-      const adults = (Number(b.adults) || 1) + (Number(b.extraAdultsQty) || 0);
+
+      // Phân bổ phần khách tương ứng cho nhóm qty phòng này
+      const itemAdults = (remRooms === qty)
+        ? remAdults
+        : Math.max(qty, Math.round((remAdults * qty) / remRooms));
+      const itemKidsUnder6 = (remRooms === qty)
+        ? remKidsUnder6
+        : Math.round((remKidsUnder6 * qty) / remRooms);
+      const itemKids6to11 = (remRooms === qty)
+        ? remKids6to11
+        : Math.round((remKids6to11 * qty) / remRooms);
+
+      remAdults = Math.max(0, remAdults - itemAdults);
+      remKidsUnder6 = Math.max(0, remKidsUnder6 - itemKidsUnder6);
+      remKids6to11 = Math.max(0, remKids6to11 - itemKids6to11);
+      remRooms -= qty;
+
       const r = await velCall('api_tao_don_dat_phong', {
-        p_ten_khach_hang: velCoreIds(b.guestName), p_so_dien_thoai: velCoreIds(b.phone), p_email: velCoreIds(b.email) || null,
-        p_ngay_den: b.checkIn, p_ngay_di: b.checkOut, p_ma_loai_phong: numOf(it.categoryId), p_so_luong_phong: qty,
-        p_so_nguoi_lon: Math.max(1, Math.ceil(adults / qty)), p_so_tre_duoi_6: Number(b.childrenUnder6) || 0,
-        p_so_tre_6_11: Number(b.children6to11) || 0, p_ghi_chu: b.note || null, p_nguon_tao: velSource(b.source)
+        p_ten_khach_hang: velCoreIds(b.guestName),
+        p_so_dien_thoai: velCoreIds(b.phone),
+        p_email: velCoreIds(b.email) || null,
+        p_ngay_den: b.checkIn,
+        p_ngay_di: b.checkOut,
+        p_ma_loai_phong: numOf(it.categoryId),
+        p_so_luong_phong: qty,
+        p_so_nguoi_lon: itemAdults,
+        p_so_tre_duoi_6: itemKidsUnder6,
+        p_so_tre_6_11: itemKids6to11,
+        p_ghi_chu: b.note || null,
+        p_nguon_tao: velSource(b.source)
       });
       codes.push(r.ma_don);
     }
     if (b.depositPaid) {
       for (const code of codes) {
         await velCall('admin_xac_nhan_don', {
-          p_ma_don_hien_thi: code, p_tien_coc: codes.length === 1 && b.depositAmount ? Number(b.depositAmount) : null,
-          p_phuong_thuc: 'CHUYEN_KHOAN', p_ghi_chu: null
+          p_ma_don_hien_thi: code,
+          p_tien_coc: codes.length === 1 && b.depositAmount ? Number(b.depositAmount) : null,
+          p_phuong_thuc: 'CHUYEN_KHOAN',
+          p_ghi_chu: null
         });
       }
     }
