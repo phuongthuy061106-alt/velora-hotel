@@ -145,6 +145,7 @@ async function velFetchState(base) {
     const c = custById.get(d.ma_khach_hang) || {};
     const lines = d.chi_tiet_don || [];
     const first = lines[0] || {};
+    const roomOnly = lines.reduce((sum, l) => sum + Number(l.gia_moi_dem) * Number(d.so_dem), 0);
     const items = [];
     lines.forEach((l) => {
       const cid = idOf('HP', l.ma_loai_phong);
@@ -162,8 +163,9 @@ async function velFetchState(base) {
       roomIds: stays.map((s) => s.roomId), roomId: (stays[0] || {}).roomId || '',
       lines: lines.map((l) => ({ id: l.ma_chi_tiet, categoryId: idOf('HP', l.ma_loai_phong) })),
       checkIn: dateStr(d.ngay_den), checkOut: dateStr(d.ngay_di), nights: d.so_dem, items,
-      earlyLatePercent: 0, roomTotal: Number(d.tong_tien_phong), surchargeTotal: 0,
-      totalAmount: Number(d.tong_tien_phong), depositAmount: Math.round(Number(d.tong_tien_phong) * 0.5),
+      earlyLatePercent: 0, roomTotal: roomOnly, surchargeTotal: Math.max(0, Number(d.tong_tien_phong) - roomOnly),
+      totalAmount: Number(d.tong_tien_phong),
+      depositAmount: Number(d.tien_coc) > 0 ? Number(d.tien_coc) : Math.round(roomOnly * 0.5),
       depositPaid: Number(d.tien_coc) > 0, status: BOOKING_STATUS[d.trang_thai] || 'Chưa xác nhận',
       checkedOutPaid: d.trang_thai === 'HOAN_TAT',
       cancelled: d.trang_thai === 'DA_HUY' || d.trang_thai === 'NO_SHOW',
@@ -350,7 +352,7 @@ function velFriendly(e) {
 }
 
 async function velPushCatalog() {
-  if (!velReady || velBusy || !velSnap) return;
+  if (!velReady || velBusy || !velSnap) return false;
   const st = state;
   const ctx = { fk: null, idMap: {}, state: st };
   ctx.fk = (id) => (ctx.idMap[id] !== undefined ? ctx.idMap[id] : numOf(id));
@@ -369,13 +371,13 @@ async function velPushCatalog() {
   });
   const cfgChanged = Object.keys(VEL_CONFIG_KEYS).filter((k) => JSON.stringify(st[k] ?? null) !== velSnap.__config[k]);
   const nChanges = plan.reduce((s, p) => s + p.upserts.length + p.deletes.length, 0) + cfgChanged.length;
-  if (nChanges === 0) return;
+  if (nChanges === 0) return false;
 
   // 2) Chặn xóa hàng loạt (ví dụ bấm "Khôi phục dữ liệu mặc định")
   const bigDelete = plan.find((p) => p.deletes.length >= 3);
   if (bigDelete && !confirm(`Thao tác này sẽ XÓA ${bigDelete.deletes.length} ${bigDelete.def.label} trên Supabase. Tiếp tục?`)) {
     await velRefresh();
-    return;
+    return true;
   }
 
   velBusy = true;
@@ -430,10 +432,11 @@ async function velPushCatalog() {
     velBusy = false;
     alert('Không lưu được lên Supabase: ' + velFriendly(e) + '\nDữ liệu sẽ được tải lại từ máy chủ.');
     await velRefresh();
-    return;
+    return true;
   }
   velBusy = false;
   await velRefresh();
+  return true;
 }
 
 // ============================================================================
@@ -447,12 +450,14 @@ const velPay = (m) => (/tiền mặt/i.test(m || '') ? 'TIEN_MAT' : /thẻ|pos/i
 const velDocType = (d) => (/^\d{12}$/.test(d) ? 'CCCD' : /^\d{9}$/.test(d) ? 'CMND' : 'HO_CHIEU');
 const velIso = (s) => { const t = new Date(s); return isNaN(t) ? new Date().toISOString() : t.toISOString(); };
 function velBkSig(b) {
-  return JSON.stringify([b.checkIn, b.checkOut, velCoreIds(b.guestName), velCoreIds(b.phone),
-    (b.items || []).map((i) => [i.categoryId, Number(i.qty) || 1]), velCoreIds(b.note)]);
+  return JSON.stringify([b.checkIn, b.checkOut, (b.items || []).map((i) => [i.categoryId, Number(i.qty) || 1]), velCoreIds(b.note)]);
 }
 function velBuildTxSnap(st) {
   return {
-    bk: new Map((st.bookings || []).map((b) => [b.id, { cancelled: !!b.cancelled, depositPaid: !!b.depositPaid, sig: velBkSig(b) }])),
+    bk: new Map((st.bookings || []).map((b) => [b.id, {
+      cancelled: !!b.cancelled, depositPaid: !!b.depositPaid, deposit: Number(b.depositAmount) || 0,
+      customerId: b.customerId, sig: velBkSig(b)
+    }])),
     ci: new Map((st.checkins || []).map((c) => [c.id, c.actualCheckOut || ''])),
     inv: new Set((st.invoices || []).map((i) => i.id))
   };
@@ -464,101 +469,76 @@ async function velCall(name, args) {
   return data;
 }
 
-// Trả về true nếu đã xử lý giao dịch (và đã tải lại dữ liệu)
+// Trả về { did, creates, edited, notice }. Hàm này KHÔNG tự tải lại dữ liệu (velPushAll sẽ làm).
 async function velPushTransactions() {
   const st = state, snap = velTxSnap;
-  if (!snap) return false;
-  const creates = [], confirms = [], checkIns = [], checkOuts = [], cancels = [];
-  let edited = false;
+  if (!snap) return { did: false, creates: false, edited: false, notice: '' };
+  const creates = [], updates = [], confirms = [], checkIns = [], checkOuts = [], cancels = [];
+  let customerChanged = false;
 
   (st.bookings || []).forEach((b) => {
     if (!isDbBooking(b.id)) { creates.push(b); return; }
     const s = snap.bk.get(b.id);
     if (!s) return;
     if (!s.cancelled && b.cancelled) { cancels.push(b); return; }
-    if (!b.cancelled && !s.depositPaid && b.depositPaid) confirms.push(b);
-    if (velBkSig(b) !== s.sig) edited = true;
+    if (b.cancelled) return;
+    if (velBkSig(b) !== s.sig) updates.push(b);
+    if (b.customerId !== s.customerId) customerChanged = true;
+    if (!s.depositPaid && b.depositPaid) confirms.push(b);
   });
   (st.checkins || []).forEach((c) => {
     if (!c.luuTruId) checkIns.push(c);
     else if (c.actualCheckOut && snap.ci.get(c.id) === '') checkOuts.push(c);
   });
 
-  if (!creates.length && !confirms.length && !checkIns.length && !checkOuts.length && !cancels.length) {
-    if (edited) {
-      alert('Việc chỉnh sửa đơn đặt phòng (ngày, số khách, hạng phòng, dịch vụ...) chưa được lưu lên Supabase nên đã được hoàn lại.');
-      await velRefresh();
-      return true;
-    }
-    return false;
+  const notice = customerChanged ? 'Việc đổi khách hàng của đơn đặt phòng chưa được lưu lên Supabase nên đã được hoàn lại.' : '';
+  if (!creates.length && !updates.length && !confirms.length && !checkIns.length && !checkOuts.length && !cancels.length) {
+    return { did: customerChanged, creates: false, edited: false, notice };
   }
 
   // 1) Đơn mới tạo trên web: mỗi hạng phòng trong đơn tạo thành một đơn trong DB
-  // 1) Đơn mới tạo trên web: phân bổ đều số khách theo tổng số phòng của đơn để không vượt sức chứa
   for (const b of creates) {
     const items = (b.items && b.items.length) ? b.items : [{ categoryId: b.categoryId, qty: 1 }];
-    const totalRooms = items.reduce((sum, it) => sum + Math.max(1, Number(it.qty) || 1), 0);
-    const totalAdults = (Number(b.adults) || 1) + (Number(b.extraAdultsQty) || 0);
-    const totalKidsUnder6 = Number(b.childrenUnder6) || 0;
-    const totalKids6to11 = Number(b.children6to11) || 0;
-
-    let remAdults = totalAdults;
-    let remKidsUnder6 = totalKidsUnder6;
-    let remKids6to11 = totalKids6to11;
-    let remRooms = totalRooms;
-
     const codes = [];
     for (const it of items) {
       const qty = Math.max(1, Number(it.qty) || 1);
-
-      // Phân bổ phần khách tương ứng cho nhóm qty phòng này
-      const itemAdults = (remRooms === qty)
-        ? remAdults
-        : Math.max(qty, Math.round((remAdults * qty) / remRooms));
-      const itemKidsUnder6 = (remRooms === qty)
-        ? remKidsUnder6
-        : Math.round((remKidsUnder6 * qty) / remRooms);
-      const itemKids6to11 = (remRooms === qty)
-        ? remKids6to11
-        : Math.round((remKids6to11 * qty) / remRooms);
-
-      remAdults = Math.max(0, remAdults - itemAdults);
-      remKidsUnder6 = Math.max(0, remKidsUnder6 - itemKidsUnder6);
-      remKids6to11 = Math.max(0, remKids6to11 - itemKids6to11);
-      remRooms -= qty;
-
+      const adults = (Number(b.adults) || 1) + (Number(b.extraAdultsQty) || 0);
       const r = await velCall('api_tao_don_dat_phong', {
-        p_ten_khach_hang: velCoreIds(b.guestName),
-        p_so_dien_thoai: velCoreIds(b.phone),
-        p_email: velCoreIds(b.email) || null,
-        p_ngay_den: b.checkIn,
-        p_ngay_di: b.checkOut,
-        p_ma_loai_phong: numOf(it.categoryId),
-        p_so_luong_phong: qty,
-        p_so_nguoi_lon: itemAdults,
-        p_so_tre_duoi_6: itemKidsUnder6,
-        p_so_tre_6_11: itemKids6to11,
-        p_ghi_chu: b.note || null,
-        p_nguon_tao: velSource(b.source)
+        p_ten_khach_hang: velCoreIds(b.guestName), p_so_dien_thoai: velCoreIds(b.phone), p_email: velCoreIds(b.email) || null,
+        p_ngay_den: b.checkIn, p_ngay_di: b.checkOut, p_ma_loai_phong: numOf(it.categoryId), p_so_luong_phong: qty,
+        p_so_nguoi_lon: Math.max(1, Math.ceil(adults / qty)), p_so_tre_duoi_6: Number(b.childrenUnder6) || 0,
+        p_so_tre_6_11: Number(b.children6to11) || 0, p_ghi_chu: b.note || null, p_nguon_tao: velSource(b.source)
       });
       codes.push(r.ma_don);
     }
     if (b.depositPaid) {
       for (const code of codes) {
         await velCall('admin_xac_nhan_don', {
-          p_ma_don_hien_thi: code,
-          p_tien_coc: codes.length === 1 && b.depositAmount ? Number(b.depositAmount) : null,
-          p_phuong_thuc: 'CHUYEN_KHOAN',
-          p_ghi_chu: null
+          p_ma_don_hien_thi: code, p_tien_coc: codes.length === 1 && b.depositAmount ? Number(b.depositAmount) : null,
+          p_phuong_thuc: 'CHUYEN_KHOAN', p_ghi_chu: null
         });
       }
     }
   }
-  // 2) Xác nhận / đặt cọc đơn có sẵn
+  // 2) Sửa đơn có sẵn: đổi ngày, đổi/tăng hạng phòng, đổi số lượng phòng, ghi chú.
+  //    Tiền cọc chỉ tăng khi web ghi nhận khách đã nộp thêm cọc (tăng hạng phòng); đổi ngày không phát sinh cọc.
+  for (const b of updates) {
+    const s = snap.bk.get(b.id);
+    const items = (b.items && b.items.length) ? b.items : [{ categoryId: b.categoryId, qty: 1 }];
+    const extraDeposit = (s.depositPaid && b.depositPaid) ? Math.max(0, (Number(b.depositAmount) || 0) - s.deposit) : 0;
+    await velCall('admin_cap_nhat_don', {
+      p_ma_don_hien_thi: b.id, p_ngay_den: b.checkIn, p_ngay_di: b.checkOut,
+      p_chi_tiet: items.map((it) => ({ ma_loai_phong: numOf(it.categoryId), so_luong: Math.max(1, Number(it.qty) || 1) })),
+      p_coc_bo_sung: extraDeposit, p_phuong_thuc: 'CHUYEN_KHOAN',
+      p_nhan_vien: (typeof currentAdminUser !== 'undefined' && currentAdminUser && currentAdminUser.name) || null,
+      p_ghi_chu: b.note || ''
+    });
+  }
+  // 3) Xác nhận / đặt cọc đơn có sẵn
   for (const b of confirms) {
     await velCall('admin_xac_nhan_don', { p_ma_don_hien_thi: b.id, p_tien_coc: Number(b.depositAmount) || null, p_phuong_thuc: 'CHUYEN_KHOAN', p_ghi_chu: null });
   }
-  // 3) Nhận phòng (web thêm mới vào đầu danh sách nên đảo lại cho đúng thứ tự)
+  // 4) Nhận phòng (web thêm mới vào đầu danh sách nên đảo lại cho đúng thứ tự)
   const usedLines = new Set((st.checkins || []).filter((c) => c.luuTruId).map((c) => c.lineId));
   for (const c of checkIns.slice().reverse()) {
     const bk = (st.bookings || []).find((b) => b.id === c.bookingId);
@@ -575,13 +555,12 @@ async function velPushTransactions() {
       p_nhan_vien: c.staffName || 'Lễ tân', p_ghi_chu: c.note || null
     });
   }
-  // 4) Trả phòng: ghi dịch vụ phát sinh của hóa đơn rồi trả từng phòng (phòng cuối cùng sẽ chốt đơn)
+  // 5) Trả phòng: ghi dịch vụ phát sinh của hóa đơn rồi trả từng phòng (phòng cuối cùng sẽ chốt đơn)
   const byBooking = new Map();
   checkOuts.forEach((c) => { if (!byBooking.has(c.bookingId)) byBooking.set(c.bookingId, []); byBooking.get(c.bookingId).push(c); });
   for (const [bkId, stays] of byBooking) {
     stays.sort((a, b) => a.luuTruId - b.luuTruId);
     const inv = (st.invoices || []).find((i) => i.bookingId === bkId && i.categoryType === 'Thanh toán trả phòng' && !snap.inv.has(i.id));
-    const bk = (st.bookings || []).find((b) => b.id === bkId) || {};
     const items = inv && (inv.serviceItems || []).length ? inv.serviceItems : [];
     for (const it of items) {
       const svc = (st.services || []).find((s) => s.name === it.name) || (st.services || []).find((s) => s.id === it.serviceId);
@@ -597,22 +576,20 @@ async function velPushTransactions() {
       });
     }
   }
-  // 5) Hủy đơn (DB tự tính phí hủy theo chính sách trong DB)
+  // 6) Hủy đơn (DB tự tính phí hủy theo chính sách trong DB)
   for (const b of cancels) {
     await velCall('api_huy_don', { p_ma_don_hien_thi: b.id, p_so_dien_thoai: velCoreIds(b.phone), p_ly_do_huy: b.cancelReason || null });
   }
-
-  await velRefresh();
-  return true;
+  return { did: true, creates: creates.length > 0, edited: updates.length > 0, notice };
 }
 
 // Hàng đợi: mỗi lần web lưu thì xử lý lần lượt, không chạy chồng nhau
 async function velPushAll() {
   if (!velReady || velBusy || !velSnap) return;
   velBusy = true;
-  let handled = false;
+  let r;
   try {
-    handled = await velPushTransactions();
+    r = await velPushTransactions();
   } catch (e) {
     console.error(e);
     velBusy = false;
@@ -621,7 +598,12 @@ async function velPushAll() {
     return;
   }
   velBusy = false;
-  if (!handled) await velPushCatalog();
+  if (!r.did) { await velPushCatalog(); return; }
+  // Sửa đơn: đẩy thêm thay đổi danh mục đi kèm (nếu có). Đơn mới thì không, vì khách mới do DB tự tạo.
+  let refreshed = false;
+  if (r.edited && !r.creates) refreshed = await velPushCatalog();
+  if (!refreshed) await velRefresh();
+  if (r.notice) alert(r.notice);
 }
 let velQueue = Promise.resolve();
 // Được gọi mỗi khi web lưu dữ liệu (xem phần gắn vào web ở cuối tệp)
