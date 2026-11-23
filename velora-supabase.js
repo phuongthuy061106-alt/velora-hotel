@@ -16,6 +16,10 @@ const VEL_SUPABASE_KEY = 'sb_publishable_v5QQqyTXbXzSG88CpB5s-g_wBPK0Yc3';      
 
 const velClient = window.supabase.createClient(VEL_SUPABASE_URL, VEL_SUPABASE_KEY);
 
+// Số phiên bản: mở web, bấm F12, gõ VEL_VERSION để biết web đang chạy bản nào
+const VEL_VERSION = '2026-11-23-api-tao-don-1-don';
+console.info('Velora Supabase', VEL_VERSION);
+
 // ---------- Tiện ích ----------
 const pad = (n, w = 3) => String(n).padStart(w, '0');
 const idOf = (prefix, n, w = 3) => prefix + pad(n, w);             // 12 -> 'P012'
@@ -504,7 +508,7 @@ async function velPushTransactions() {
     // MỘT đơn duy nhất cho cả đơn trên web, dù có nhiều phòng / nhiều hạng phòng.
     // Tổng số khách được DB tự chia xuống từng phòng để kiểm tra sức chứa.
     const totalAdults = (Number(b.adults) || 1) + (Number(b.extraAdultsQty) || 0);
-    const r = await velCall('admin_tao_don_nhieu_phong', {
+    const r = await velCall('api_tao_don', {
       p_ten_khach_hang: velCoreIds(b.guestName), p_so_dien_thoai: velCoreIds(b.phone), p_email: velCoreIds(b.email) || null,
       p_ngay_den: b.checkIn, p_ngay_di: b.checkOut,
       p_chi_tiet: items.map((it) => ({ ma_loai_phong: numOf(it.categoryId), so_luong: Math.max(1, Number(it.qty) || 1) })),
